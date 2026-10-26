@@ -54,6 +54,9 @@ static double vkr_now_ms(void)
  * buffer full", a flicker of missing pieces). A replacement that does not
  * fit waits for the next frame; the original texture shows until then. */
 #define VKR_DRAW_RESERVE (12u << 20)
+/* Every texture upload (not only HD ones) stops this short of the end, so
+ * the draws after a race start's ~490 new textures still fit (from #24). */
+#define VKR_TEX_LIMIT (VKR_BUF_BYTES - VKR_DRAW_RESERVE)
 #define VKR_FRAMES 2                    /* frames in flight */
 #define VKR_SPEC_WORDS 39               /* xbox.frag SPEC + S0..S37 */
 #define VKR_PIPE_INDEX 8192
@@ -876,6 +879,11 @@ static VkPipeline create_pipeline(VkrContext *c, const uint32_t *key)
             fprintf(stderr, "[VKR] pipeline creation failed\n");
             return VK_NULL_HANDLE;
         }
+        /* Debug only: written from the GPU executor, and a race start makes
+         * ~40 pipelines -- their lines went through the log pipe at every
+         * level (the pump drops them below DEBUG) and the executor waited in
+         * those writes, 50-75 ms of a race start's 90 ms frame. */
+        if (log_enabled(LOG_DEBUG))
         fprintf(stderr, "[VKR] pipeline: %.1f ms (blend %u %u/%u eq %u mask %X vsh %u topo %u wdepth %u"
                 " rc %u stages %u)\n", vkr_now_ms() - t0,
                 key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
@@ -1900,7 +1908,8 @@ int vkr_offscreen_use(VkrContext *c, uint32_t key, uint32_t w, uint32_t h, float
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-        fprintf(stderr, "[VKR] offscreen target %08X %ux%u on the GPU at %ux%u\n", key, w, h, o->sw, o->sh);
+        if (log_enabled(LOG_DEBUG))    /* the executor: no write at a player's level */
+            fprintf(stderr, "[VKR] offscreen target %08X %ux%u on the GPU at %ux%u\n", key, w, h, o->sw, o->sh);
         c->noff++;
     }
     end_pass(c);
@@ -1996,7 +2005,7 @@ int vkr_tex_update(VkrContext *c, VkrTex *t, uint64_t key, const uint32_t *pixel
 {
     VkBufferImageCopy cp = {0};
     uint32_t off = (c->buf_used + 15) & ~15u, bytes = t->w * t->h * 4;
-    if (off + bytes > VKR_BUF_BYTES || !begin_cmd(c))
+    if (off + bytes > VKR_TEX_LIMIT || !begin_cmd(c))
         return 0;
     end_pass(c);
     memcpy(c->buf_map + off, pixels, bytes);
@@ -2034,6 +2043,11 @@ VkrTex *vkr_tex_create(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
  * levels distant surfaces shimmer and anisotropic filtering has nothing to
  * blend. Not for textures later rewritten with vkr_tex_update. Off with
  * RECOMP_TEX_MIPS=0. */
+/* RECOMP_VKR_STATS: time in vkAllocateMemory for textures (vkr_backend.c's
+ * [VKRSTAT] line takes and clears it once a second). */
+double g_vkr_alloc_ms;
+unsigned g_vkr_allocs;
+
 VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
                           const uint32_t *pixels, int mips)
 {
@@ -2047,7 +2061,7 @@ VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     uint32_t off = (c->buf_used + 15) & ~15u, bytes = w * h * 4;
     int m;
 
-    if (!t || !w || !h || off + bytes > VKR_BUF_BYTES) { free(t); return NULL; }
+    if (!t || !w || !h || off + bytes > VKR_TEX_LIMIT) { free(t); return NULL; }
     if (c->tex_mips < 0) {
         const char *e = getenv("RECOMP_TEX_MIPS");
         c->tex_mips = !(e && *e == '0');
@@ -2066,7 +2080,16 @@ VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     vkGetImageMemoryRequirements(c->dev, t->img, &mr);
     m = find_mem(c, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     ai.allocationSize = mr.size; ai.memoryTypeIndex = (uint32_t)(m < 0 ? 0 : m);
-    if (vkAllocateMemory(c->dev, &ai, NULL, &t->mem) != VK_SUCCESS) {
+    {
+        double a0 = vkr_now_ms();
+        VkResult ar = vkAllocateMemory(c->dev, &ai, NULL, &t->mem);
+        g_vkr_alloc_ms += vkr_now_ms() - a0;
+        g_vkr_allocs++;
+        if (ar != VK_SUCCESS) {
+            vkDestroyImage(c->dev, t->img, NULL); free(t); return NULL;
+        }
+    }
+    if (0) {
         vkDestroyImage(c->dev, t->img, NULL); free(t); return NULL;
     }
     vkBindImageMemory(c->dev, t->img, t->mem, 0);
