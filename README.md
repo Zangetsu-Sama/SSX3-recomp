@@ -55,6 +55,9 @@
 >   session end on Cmd+Q / window close; launcher rows for fullscreen, FPS
 >   counter, motion blur and the modern camera; on macOS settings, keys.ini,
 >   logs and F12 marks in `~/Library/Application Support/SSX3`.
+> - **Open upstream PRs merged in** (authors kept in the commits): #14 and the
+>   race-start, HUD-flicker, HD-preload and FPS-drop work of #24 (Raajik,
+>   malinkicat), #22 (Vulkan 1.3 loaders), #15 (autonav `main=N`).
 > - **Linux build fixes** (the original's `main` did not compile on Linux):
 >   `log.h` was only included on Windows in `src/game_state.c` and
 >   `src/ssx3_overrides.c`; `fb_present_sdl.c` used a function before
