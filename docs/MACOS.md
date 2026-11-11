@@ -16,7 +16,8 @@ Snow Jam race at 60 FPS (2583x1440, MSAA 4x).
    choose the settings, **Play**.
 
 Keyboard = player 1. Settings, `keys.ini` (copy `keys.example.ini`), logs and F12
-marks are in `~/Library/Application Support/SSX3`. F11 = fullscreen, F3 = FPS counter. Xbox One /
+marks are in `~/Library/Application Support/SSX3`. F11 = fullscreen, F3 = FPS counter, F4-F6 HD textures /
+draw distance / shadows, F7 boost cheat, F8 autopilot (on a Mac keyboard hold Fn). Xbox One /
 Series and other controllers SDL knows work over Bluetooth or USB. Requires macOS 14+.
 
 ## Build (from macOS, nothing installed on the Mac; Docker Desktop needed)
